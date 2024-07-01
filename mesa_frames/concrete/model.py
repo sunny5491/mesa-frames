@@ -4,6 +4,7 @@ import numpy as np
 
 from mesa_frames.abstract.agents import AgentSetDF
 from mesa_frames.concrete.agents import AgentsDF
+from mesa_frames.types import TimeT
 
 
 class ModelDF:
@@ -55,6 +56,8 @@ class ModelDF:
     _seed: int | Sequence[int]
     running: bool
     _agents: AgentsDF
+    _time: TimeT
+    _steps: int
 
     def __new__(
         cls, seed: int | Sequence[int] | None = None, *args: Any, **kwargs: Any
@@ -73,6 +76,7 @@ class ModelDF:
         self.schedule = None
         self.current_id = 0
         self._agents = AgentsDF()
+        self._time = 0
 
     def get_agents_of_type(self, agent_type: type) -> AgentSetDF:
         """Retrieve the AgentSetDF of a specified type.
@@ -129,6 +133,11 @@ class ModelDF:
     def step(self) -> None:
         """A single step. Fill in here."""
         raise NotImplementedError("step() method needs to be overridden in a subclass.")
+
+    def _advance_time(self, deltat: TimeT = 1):
+        """Increment the model's steps counter and clock."""
+        self._steps += 1
+        self._time += deltat
 
     @property
     def agents(self) -> AgentsDF:
