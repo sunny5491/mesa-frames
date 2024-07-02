@@ -1,10 +1,13 @@
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from mesa_frames.abstract.agents import AgentSetDF
 from mesa_frames.concrete.agents import AgentsDF
 from mesa_frames.types import TimeT
+
+if TYPE_CHECKING:
+    from mesa_frames.abstract.agents import AgentSetDF
 
 
 class ModelDF:
@@ -78,7 +81,7 @@ class ModelDF:
         self._agents = AgentsDF()
         self._time = 0
 
-    def get_agents_of_type(self, agent_type: type) -> AgentSetDF:
+    def get_agents_of_type(self, agent_type: type) -> "AgentSetDF":
         """Retrieve the AgentSetDF of a specified type.
 
         Parameters

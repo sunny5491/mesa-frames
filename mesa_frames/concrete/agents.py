@@ -1,19 +1,12 @@
 from collections import defaultdict
-from typing import (
-    Any,
-    Callable,
-    Iterable,
-    Iterator,
-    Literal,
-    Self,
-    Sequence,
-    cast,
-    overload,
-)
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from typing import Any, Literal, Self, cast, overload
+
+from collections.abc import Collection
 
 import polars as pl
 
-from mesa_frames.abstract.agents import AgentContainer, AgentSetDF, Collection
+from mesa_frames.abstract.agents import AgentContainer, AgentSetDF
 from mesa_frames.types import DataFrame, IdsLike, MaskLike, Series
 
 
@@ -234,7 +227,7 @@ class AgentsDF(AgentContainer):
                 deleted += initial_len - len(agentset)
             if deleted < len(list(agents)):  # TODO: fix type hint
                 raise KeyError(
-                    f"There exist some IDs which are not present in any agentset"
+                    "There exist some IDs which are not present in any agentset"
                 )
         return obj
 

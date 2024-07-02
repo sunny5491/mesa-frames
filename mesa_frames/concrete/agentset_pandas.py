@@ -1,22 +1,11 @@
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Collection,
-    Iterable,
-    Iterator,
-    Self,
-    Sequence,
-    overload,
-)
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from typing import TYPE_CHECKING, Any, Self, overload
 
 import pandas as pd
 import polars as pl
-from networkx import intersection
 
 from mesa_frames.abstract.agents import AgentSetDF
 from mesa_frames.concrete.agentset_polars import AgentSetPolars
-from mesa_frames.concrete.model import ModelDF
 from mesa_frames.types import PandasIdsLike, PandasMaskLike
 
 if TYPE_CHECKING:
@@ -206,7 +195,7 @@ class AgentSetPandas(AgentSetDF):
         original_active_indices = obj._mask.index[obj._mask].copy()
         obj._agents.drop(remove_ids, inplace=True)
         if len(obj._agents) == initial_len:
-            raise KeyError(f"Some IDs were not found in agent set.")
+            raise KeyError("Some IDs were not found in agent set.")
 
         self._update_mask(original_active_indices)
         return obj
@@ -218,7 +207,6 @@ class AgentSetPandas(AgentSetDF):
         mask: PandasMaskLike = None,
         inplace: bool = True,
     ) -> Self:
-
         obj = self._get_obj(inplace)
         b_mask = obj._get_bool_mask(mask)
         masked_df = obj._get_masked_df(mask)
@@ -260,15 +248,15 @@ class AgentSetPandas(AgentSetDF):
     ) -> Self:
         obj = self._get_obj(inplace)
         bool_mask = obj._get_bool_mask(mask)
-        if n != None:
-            bool_mask = pd.Series(
-                obj._agents.index.isin(obj._agents[bool_mask].sample(n).index),
-                index=obj._agents.index,
-            )
         if filter_func:
             bool_mask = bool_mask & obj._get_bool_mask(filter_func(obj))
         if negate:
             bool_mask = ~bool_mask
+        if n is not None:
+            bool_mask = pd.Series(
+                obj._agents.index.isin(obj._agents[bool_mask].sample(n).index),
+                index=obj._agents.index,
+            )
         obj._mask = bool_mask
         return obj
 
@@ -315,14 +303,13 @@ class AgentSetPandas(AgentSetDF):
         else:
             final_df = pd.concat([obj._agents for obj in agentsets])
             final_mask = pd.concat([obj._mask for obj in agentsets])
-        new_obj = self._get_obj(inplace=False)
-        new_obj._agents = final_df
-        new_obj._mask = final_mask
+        self._agents = final_df
+        self._mask = final_mask
         if not isinstance(original_masked_index, type(None)):
             ids_to_remove = original_masked_index.difference(self._agents.index)
             if not ids_to_remove.empty:
-                new_obj.remove(ids_to_remove, inplace=True)
-        return new_obj
+                self.remove(ids_to_remove, inplace=True)
+        return self
 
     def _get_bool_mask(
         self,
@@ -402,12 +389,19 @@ class AgentSetPandas(AgentSetDF):
         new_active_indices: pd.Index | None = None,
     ) -> None:
         # Update the mask with the old active agents and the new agents
-        self._mask = pd.Series(
-            self._agents.index.isin(original_active_indices)
-            | self._agents.index.isin(new_active_indices),
-            index=self._agents.index,
-            dtype=pd.BooleanDtype(),
-        )
+        if new_active_indices is None:
+            self._mask = pd.Series(
+                self._agents.index.isin(original_active_indices),
+                index=self._agents.index,
+                dtype=pd.BooleanDtype(),
+            )
+        else:
+            self._mask = pd.Series(
+                self._agents.index.isin(original_active_indices)
+                | self._agents.index.isin(new_active_indices),
+                index=self._agents.index,
+                dtype=pd.BooleanDtype(),
+            )
 
     def __getattr__(self, name: str) -> Any:
         super().__getattr__(name)
