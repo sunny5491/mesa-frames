@@ -25,15 +25,15 @@ Key concepts:
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Callable, Self
 
 import polars as pl
+from typing_extensions import Callable, Self
 
 from mesa_frames.abstract.agents import AgentSetDF
 from mesa_frames.abstract.mixin import CopyMixin
 from mesa_frames.concrete.agents import AgentsDF
 from mesa_frames.concrete.model import ModelDF
-from mesa_frames.types import IdsLike, Series, TimeT
+from mesa_frames.types import IdsLike, TimeT
 
 # BaseScheduler has a self.time of int, while
 # StagedActivation has a self.time of float
@@ -55,21 +55,38 @@ class BaseScheduler(CopyMixin):
     A simple scheduler that activates AgentSet one at a time, in the order they were added.
     It assumes that each AgentSet added has a `step` method which takes no arguments and executes the AgentSet actions.
 
-    Attributes:
-        - model (ModelDF): The model instance associated with the scheduler.
-        - steps (int): The number of steps the scheduler has taken.
-        - time (TimeT): The current time in the simulation. Can be an integer or a float.
+    Attributes
+    ----------
+    model : ModelDF
+        The model instance associated with the scheduler.
+    steps : int 
+        The number of steps the scheduler has taken.
+    time : TimeT
+        The current time in the simulation. Can be an integer or a float.
 
-    Methods:
-        - add: Adds an agent to the scheduler.
-        - remove: Removes an agent from the scheduler.
-        - step: Executes a step, which involves activating each agent once.
-        - get_agent_count: Returns the number of agents in the scheduler.
-        - agents (property): Returns a list of all agent instances.
+    Methods
+    -------
+    add(agents: IdsLike | AgentSetDF | Iterable[AgentSetDF], inplace: bool = True) -> Self
+        Add agents to the schedule.
+    do_each(method: str, shuffle: bool = False, inplace: bool = True) -> Self
+        Execute the method on each AgentSetDF for agents in the scheduler.
+    get_agent_count() -> int
+        Returns the current number of active agents in the queue.
+    get_agent_keys(shuffle: bool = False) -> Series
+        Return the ids of active agents in the scheduler.
+    remove(agents: IdsLike | AgentSetDF | Iterable[AgentSetDF], inplace: bool = True) -> Self
+        Remove agents from the scheduler.
+    step(inplace: bool = True) -> Self
+        Execute the step of all AgentSetDFs in the schedule, one at a time, in the order they were added.
+    
+    Properties
+    ----------
+    agents : AgentsDF
+        The active agents in the scheduler.
     """
 
     def __init__(
-        self, model: ModelDF, agentsets: Iterable[AgentSetDF] | None = None
+        self, model: ModelDF, agentsets: AgentSetDF | Iterable[AgentSetDF] | None = None
     ) -> None:
         """Create a new BaseScheduler.
 
@@ -77,8 +94,8 @@ class BaseScheduler(CopyMixin):
         ----------
         model: ModelDF
             The model object associated with the scheduler.
-        agents: Iterable[AgentSetDF], None, optional
-            An iterable of agents to be scheduled. If None, defaults to an empty list.
+        agentsets: AgentSetDF | Iterable[AgentSetDF], optional
+           AgentSetDFs to be added to the scheduler.
         """
         self.model = model
         self.steps = 0
@@ -96,27 +113,38 @@ class BaseScheduler(CopyMixin):
 
     def add(
         self,
-        agentsets: IdsLike | AgentSetDF | Iterable[AgentSetDF],
+        agents: IdsLike | AgentSetDF | Iterable[AgentSetDF],
         inplace: bool = True,
     ) -> Self:
-        """Add an agentsets or agents specified by their unique_id to the schedule.
+        """Add agents to the schedule.
 
         Parameters:
         ----------
-        agentset: IdsLike | AgentSetDF | Iterable[AgentSetDF]
-            An AgentSetDF object to be added to the scheduler. NOTE: The agentset must have a `step` method.
+        agents: IdsLike | AgentSetDF | Iterable[AgentSetDF]
+            Ids or agentsets to be added to the schedule.
+            NOTE: If agents are AgentSetDF, they must have a step method.
+            If agents are IdsLike, there must be a corresponding agentset already added to the scheduler.
+        inplace: bool, optional
+            If True, the operation is performed in place. Otherwise, a new object is returned.
+            By default, True.
+
+        Returns:
+        -------
+        Self
 
         Raises:
         -------
         ValueError
             If the agentset is already in the scheduler or the ids are already active.
+        KeyError
+            If the agentset is not in the model.
         """
         obj = self._get_obj(inplace)
-        if isinstance(agentsets, AgentSetDF) or (
-            isinstance(agentsets, Iterable) and next(iter(agentsets), AgentSetDF)
+        if isinstance(agents, AgentSetDF) or (
+            isinstance(agents, Iterable) and next(iter(agents), AgentSetDF)
         ):
             old_ids = obj._agents._ids.clone()
-            obj._agents.add(agentsets, inplace=True)  # type: ignore (agentsets can be IdsLike according to PyLance)
+            obj._agents.add(agents, inplace=True)  # type: ignore (agentsets can be IdsLike according to PyLance)
             # Add only old active agents and new agents to active agents
             obj._active_ids = pl.concat(
                 [
@@ -125,42 +153,111 @@ class BaseScheduler(CopyMixin):
                 ]
             )
         else:  # IdsLike
-            ids = pl.Series(agentsets)
+            ids = pl.Series(agents)
             if ids.is_in(self._active_ids).any():
                 raise ValueError("Some ids are already active in the schedule")
+            elif ids.is_in(self._agents._ids).not_().any():
+                raise KeyError("Some ids are not in the scheduler")
             obj._active_ids = pl.concat([obj._active_ids, ids])
         return obj
+
+    def do_each(self, method: str, shuffle: bool = False, inplace: bool = True) -> Self:
+        """Execute the method on each AgentSetDF for agents in the scheduler.
+
+        Parameters
+        ----------
+        method : str
+            The method to execute on each AgentSetDF.
+        shuffle : bool, optional
+            Whether to shuffle the order of AgentSetDF, by default False
+        inplace : bool, optional
+            Whether to modify the AgentSetDF in place, by default True
+
+        Returns
+        -------
+        Self
+        """
+        obj = self._get_obj(inplace)
+        if shuffle:
+            self._agents.shuffle(inplace=True)
+        self._agents.do(method, mask=self._active_ids, inplace=True)
+        return obj
+
+    def get_agent_count(self) -> int:
+        """Returns the current number of active agents in the queue.
+
+        Returns
+        -------
+        int
+        """
+        return len(self._active_ids)
+
+    def get_agent_keys(self, shuffle: bool = False) -> pl.Series:
+        """Return the ids of active agents in the scheduler.
+
+        Parameters
+        ----------
+        shuffle : bool, optional
+            Whether to shuffle the order of the agents, by default False
+
+        Returns
+        -------
+        pl.Series
+        """
+        agent_keys = self._active_ids
+        if shuffle:
+            self.model.random.shuffle(agent_keys)
+        return agent_keys
 
     def remove(
         self, agents: IdsLike | AgentSetDF | Iterable[AgentSetDF], inplace: bool = True
     ) -> Self:
-        """Remove ids or agentsets from the schedules.
+        """Remove agents from the scheduler.
 
-        Note:
-            It is only necessary to explicitly remove agents ids from the schedule if
-            the agent is not removed from the agentset.
+        NOTE:  It is only necessary to explicitly remove agents ids from the schedule if
+        the agent is not removed from the agentset.
 
         Parameters:
         ----------
         agents: IdsLike | AgentSetDF | Iterable[AgentSetDF]
             The ids or agentsets to be removed from the schedule.
+            NOTE: If agents are IdsLike, they must be active in the scheduler.
         inplace: bool, optional
-            If True, the operation is performed in place. Otherwise, a new object is returned.
+            If True, the operation is performed in place. Otherwise, a new object is returned. Default is True.
+
+        Returns:
+        -------
+        Self
+
+        Raises:
+        -------
+        ValueError
+            If the agents are already inactive in the scheduler.
+        KeyError
+            If the agents are not in the scheduler.
         """
         obj = self._get_obj(inplace)
-        if isinstance(agents, AgentSetDF):
-            obj._agents._agentsets.remove(agents)
-        else:
+        if (
+            isinstance(agents, AgentSetDF)
+            or isinstance(agents, Iterable)
+            and next(iter(agents), AgentSetDF)
+        ):
+            obj._agents.remove(agents)
+        else:  # IdsLike
+            if pl.Series(agents).is_in(obj._active_ids).not_().all():
+                raise ValueError("Some ids are already inactive in the schedule")
+            elif pl.Series(agents).is_in(obj._agents._ids).not_().any():
+                raise KeyError("Some ids are not in the scheduler")
             obj._active_ids = obj._active_ids.filter(self._active_ids != agents)
         return obj
 
     def step(self, inplace: bool = True) -> Self:
-        """Execute the step of all the AgentSetDF in the schedule, one at a time, in the order they were added.
+        """Execute the step of all AgentSetDFs in the schedule, one at a time, in the order they were added.
 
         Parameters:
         ----------
         inplace: bool, optional
-            If True, the operation is performed in place. Otherwise, a new object is returned.
+            If True, the operation is performed in place. Otherwise, a new object is returned. Default is True.
 
         Returns:
         -------
@@ -179,56 +276,8 @@ class BaseScheduler(CopyMixin):
         obj.model._advance_time()
         return obj
 
-    def get_agent_count(self) -> int:
-        """Returns the current number of agents in the queue."""
-        return len(self._active_ids)
-
-    def get_agent_keys(self, shuffle: bool = False) -> Series:
-        """Return the ids of all agents in the scheduler.
-
-        Parameters
-        ----------
-        shuffle : bool, optional
-            Whether to shuffle the order of , by default False
-
-        Returns
-        -------
-        Series
-            _description_
-        """
-        agent_keys = self._agents._ids
-        if shuffle:
-            self.model.random.shuffle(agent_keys)
-        return agent_keys
-
-    def do_each(self, method: str, shuffle: bool = False, inplace: bool = True) -> Self:
-        """Execute the method on each AgentSet.
-
-        Parameters
-        ----------
-        method : str
-            _description_
-        shuffle : bool, optional
-            Whether to shuffle the order of AgentSet, by default False
-        inplace : bool, optional
-            Whether to modify the AgentSet in place, by default True
-
-        Returns
-        -------
-        Self
-        """
-        obj = self._get_obj(inplace)
-        if shuffle:
-            self._agents.shuffle(inplace=True)
-        self._agents.do(method, inplace=True)
-        return obj
-
     @property
     def agents(self) -> AgentsDF:
-        return self._agents
-
-    @property
-    def active_agents(self) -> AgentsDF:
         return self._agents.select(self._active_ids, inplace=False)
 
     def __len__(self) -> int:
@@ -257,6 +306,14 @@ class RandomActivation(BaseScheduler):
         """Executes the step of all agents, one at a time, in
         random order.
 
+        Parameters
+        ----------
+        inplace : bool, optional
+            If True, the operation is performed in place. Otherwise, a new object is returned. Default is True.
+
+        Returns
+        -------
+        Self
         """
         obj = self._get_obj(inplace)
         obj.do_each("step", shuffle=True, inplace=True)
@@ -278,13 +335,24 @@ class SimultaneousActivation(BaseScheduler):
 
     Inherits all attributes and methods from BaseScheduler.
 
-    Methods:
+    Methods
+    -------
     step(inplace: bool = True) -> Self
         Executes a step for all agents, first calling `step` then `advance` on each.
     """
 
     def step(self, inplace: bool = True) -> Self:
-        """Step all agents, then advance them."""
+        """Step all agents, then advance them.
+
+        Parameters
+        ----------
+        inplace : bool, optional
+            If True, the operation is performed in place. Otherwise, a new object is returned. Default is True.
+
+        Returns
+        -------
+        Self
+        """
         obj = self._get_obj(inplace)
         obj.do_each("step", shuffle=False, inplace=True)
         obj.do_each("advance", shuffle=False, inplace=True)
@@ -295,7 +363,7 @@ class SimultaneousActivation(BaseScheduler):
 
 class StagedActivation(BaseScheduler):
     """
-    A scheduler allowing agent activation to be divided into several stages, with all AgentSetDF executing one stage
+    A scheduler allowing agent activation to be divided into several stages, with all AgentSetDFs executing one stage
     before moving on to the next. This class is a generalization of SimultaneousActivation.
 
     This scheduler is useful for complex models where actions need to be broken down into distinct phases
@@ -324,7 +392,7 @@ class StagedActivation(BaseScheduler):
     def __init__(
         self,
         model: ModelDF,
-        agentsets: Iterable[AgentSetDF] | None = None,
+        agentsets: AgentSetDF | Iterable[AgentSetDF] | None = None,
         stage_list: list[str] | None = None,
         shuffle: bool = False,
         shuffle_between_stages: bool = False,
@@ -335,9 +403,9 @@ class StagedActivation(BaseScheduler):
         ----------
         model: ModelDF
             The model to which the schedule belongs.
-        agentsets: Iterable[AgentSetDF], None, optional
+        agentsets: AgentSetDF | Iterable[AgentSetDF], optional
             An iterable of AgentSetDF who are controlled by the schedule.
-        stage_list: list[str], None, optional
+        stage_list: list[str], optional
             A list of strings of names of stages to run, in the order to run them in.
         shuffle: bool, optional
             If True, shuffle the order of agents each step.
@@ -379,9 +447,9 @@ class StagedActivation(BaseScheduler):
 
 class RandomActivationByType(BaseScheduler):
     """
-    A scheduler that activates each type of agent once per step, in random order, with the order reshuffled every step.
+    A scheduler that activates each type of AgentSetDFs once per step, in random order, with the order reshuffled every step.
 
-    This scheduler is useful for models with multiple types of agents, ensuring that each type is treated
+    This scheduler is useful for models with multiple types of AgentSetDFs, ensuring that each type is treated
     equitably in terms of activation order. The randomness in activation order helps in reducing biases
     due to ordering effects.
 
@@ -390,14 +458,12 @@ class RandomActivationByType(BaseScheduler):
     If you want to do some computations / data collections specific to an AgentSetDF
     type, you can either:
     - access via scheduler.agentsets_by_type or model.agents.agentsets_by_type
-    - loop through all AgentSetDF, and filter by their type
+    - loop through all AgentSetDFs, and filter by their type
 
     Methods:
     -------
-    step()
-        Executes the step of each agent type in a random order.
-        - step_type: Activates all agents of a given type.
-        - get_type_count: Returns the count of agents of a specific type.
+    step(self, shuffle_types: bool = True, shuffle_agents: bool = True, inplace: bool = True) -> Self
+        Executes the step of each AgentSetDF type, one at a time, in random order.
 
     Properties:
     ----------
@@ -417,11 +483,11 @@ class RandomActivationByType(BaseScheduler):
         Parameters:
         ----------
         shuffle_types : bool, optional
-            If True, the order of execution of each types is shuffled.
+            If True, the order of execution of each AgentSetDF type is shuffled.
         shuffle_agents : bool, optional
-            If True, the order of execution of each agents in a type group is shuffled.
+            If True, the order of execution of each agents in a AgentSetDF type is shuffled.
         inplace : bool, optional
-            If True, the operation is performed in place. Otherwise, a new object is returned.
+            If True, the operation is performed in place. Otherwise, a new object is returned. Default is True.
         """
         obj = self._get_obj(inplace)
         type_keys = obj.agentsets_by_type.keys()
@@ -440,18 +506,23 @@ class RandomActivationByType(BaseScheduler):
         inplace: bool = True,
     ) -> Self:
         """
-        Shuffle order and run all agents of a given type.
+        Shuffle order and run all agents of a given AgentSetDF type.
         This method is equivalent to the NetLogo 'ask [breed]...'.
 
         Parameters:
         ----------
         agentset_type : type[AgentSetDF]
             Class object of the type to run.
+        shuffle_agents : bool, optional
+            If True, shuffle the order of agents before running them.
+        inplace : bool, optional
+            If True, the operation is performed in place. Otherwise, a new object is returned. Default is True.
         """
-        agents = self.agentsets_by_type[agentset_type]
+        obj = self._get_obj(inplace)
+        agents = obj.agentsets_by_type[agentset_type]
         if shuffle_agents:
-            agents.shuffle(inplace=True)
-        agents.do("step")
+            obj._agents.shuffle(inplace=True)
+        obj.do("step")
 
     def get_type_count(self, agentset_type: type[AgentSetDF]) -> int:
         """
@@ -460,7 +531,7 @@ class RandomActivationByType(BaseScheduler):
         return len(self.agentsets_by_type[agentset_type])
 
     @property
-    def agentsets_by_type(self) -> dict[type[AgentSetDF], list[AgentSetDF]]:
+    def agentsets_by_type(self) -> dict[type[AgentSetDF], AgentsDF]:
         return self._agents.agentsets_by_type
 
 
