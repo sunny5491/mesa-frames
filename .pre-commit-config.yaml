@@ -32,3 +32,7 @@ repos:
         "--ignore-words",
         ".codespellignore",
       ]
+- repo: https://github.com/sphinx-contrib/sphinx-lint
+  rev: v0.6.7
+  hooks:
+    - id: sphinx-lint
